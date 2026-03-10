@@ -122,3 +122,15 @@ class TestTitleMiddlewareCoreLogic:
 
         monkeypatch.setattr(middleware, "_should_generate_title", lambda state: False)
         assert asyncio.run(middleware.aafter_model({"messages": []}, runtime=MagicMock())) is None
+
+    def test_after_model_returns_title_only_when_needed(self, monkeypatch):
+        middleware = TitleMiddleware()
+        monkeypatch.setattr(middleware, "_should_generate_title", lambda state: True)
+        monkeypatch.setattr(middleware, "_generate_title_sync", lambda state: "同步标题")
+
+        assert middleware.after_model({"messages": []}, runtime=MagicMock()) == {
+            "title": "同步标题"
+        }
+
+        monkeypatch.setattr(middleware, "_should_generate_title", lambda state: False)
+        assert middleware.after_model({"messages": []}, runtime=MagicMock()) is None

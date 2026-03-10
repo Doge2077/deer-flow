@@ -17,10 +17,7 @@ import { uploadFiles } from "../uploads";
 
 import type { AgentThread, AgentThreadState } from "./types";
 
-export type ToolEndEvent = {
-  name: string;
-  data: unknown;
-};
+const SUPPORTED_STREAM_MODES = ["values", "messages-tuple", "custom"] as const;
 
 export type ThreadStreamOptions = {
   threadId?: string | null | undefined;
@@ -28,7 +25,6 @@ export type ThreadStreamOptions = {
   isMock?: boolean;
   onStart?: (threadId: string) => void;
   onFinish?: (state: AgentThreadState) => void;
-  onToolEnd?: (event: ToolEndEvent) => void;
 };
 
 export function useThreadStream({
@@ -37,26 +33,21 @@ export function useThreadStream({
   isMock,
   onStart,
   onFinish,
-  onToolEnd,
 }: ThreadStreamOptions) {
   const { t } = useI18n();
   // Track the thread ID that is currently streaming to handle thread changes during streaming
   const [onStreamThreadId, setOnStreamThreadId] = useState(() => threadId);
-  // Ref to track current thread ID across async callbacks without causing re-renders,
-  // and to allow access to the current thread id in onUpdateEvent
-  const threadIdRef = useRef<string | null>(threadId ?? null);
   const startedRef = useRef(false);
 
   const listeners = useRef({
     onStart,
     onFinish,
-    onToolEnd,
   });
 
   // Keep listeners ref updated with latest callbacks
   useEffect(() => {
-    listeners.current = { onStart, onFinish, onToolEnd };
-  }, [onStart, onFinish, onToolEnd]);
+    listeners.current = { onStart, onFinish };
+  }, [onStart, onFinish]);
 
   useEffect(() => {
     const normalizedThreadId = threadId ?? null;
@@ -65,7 +56,6 @@ export function useThreadStream({
       startedRef.current = false;
       setOnStreamThreadId(normalizedThreadId);
     }
-    threadIdRef.current = normalizedThreadId;
   }, [threadId]);
 
   const _handleOnStart = useCallback((id: string) => {
@@ -77,7 +67,7 @@ export function useThreadStream({
 
   const handleStreamStart = useCallback(
     (_threadId: string) => {
-      threadIdRef.current = _threadId;
+      setOnStreamThreadId(_threadId);
       _handleOnStart(_threadId);
     },
     [_handleOnStart],
@@ -94,44 +84,6 @@ export function useThreadStream({
     fetchStateHistory: { limit: 1 },
     onCreated(meta) {
       handleStreamStart(meta.thread_id);
-      setOnStreamThreadId(meta.thread_id);
-    },
-    onLangChainEvent(event) {
-      if (event.event === "on_tool_end") {
-        listeners.current.onToolEnd?.({
-          name: event.name,
-          data: event.data,
-        });
-      }
-    },
-    onUpdateEvent(data) {
-      const updates: Array<Partial<AgentThreadState> | null> = Object.values(
-        data || {},
-      );
-      for (const update of updates) {
-        if (update && "title" in update && update.title) {
-          void queryClient.setQueriesData(
-            {
-              queryKey: ["threads", "search"],
-              exact: false,
-            },
-            (oldData: Array<AgentThread> | undefined) => {
-              return oldData?.map((t) => {
-                if (t.thread_id === threadIdRef.current) {
-                  return {
-                    ...t,
-                    values: {
-                      ...t.values,
-                      title: update.title,
-                    },
-                  };
-                }
-                return t;
-              });
-            },
-          );
-        }
-      }
     },
     onCustomEvent(event: unknown) {
       if (
@@ -326,7 +278,7 @@ export function useThreadStream({
             threadId: threadId,
             streamSubgraphs: true,
             streamResumable: true,
-            streamMode: ["values", "messages-tuple", "custom"],
+            streamMode: [...SUPPORTED_STREAM_MODES],
             config: {
               recursion_limit: 1000,
             },

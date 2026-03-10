@@ -11,15 +11,25 @@ import os
 from pathlib import Path
 
 import pytest
+from langchain_core.tools import tool
 
+from src.config.app_config import AppConfig
 from src.client import DeerFlowClient, StreamEvent
+from src.models import create_chat_model
 
 # Skip entire module in CI or when no config.yaml exists
 _skip_reason = None
 if os.environ.get("CI"):
     _skip_reason = "Live tests skipped in CI"
-elif not Path(__file__).resolve().parents[2].joinpath("config.yaml").exists():
-    _skip_reason = "No config.yaml found — live tests require valid API credentials"
+else:
+    config_path = Path(__file__).resolve().parents[2].joinpath("config.yaml")
+    if not config_path.exists():
+        _skip_reason = "No config.yaml found — live tests require valid API credentials"
+    else:
+        try:
+            AppConfig.from_file()
+        except Exception as exc:
+            _skip_reason = f"Live tests skipped because config.yaml is not runnable in this environment: {exc}"
 
 if _skip_reason:
     pytest.skip(_skip_reason, allow_module_level=True)
@@ -33,6 +43,30 @@ if _skip_reason:
 def client():
     """Create a real DeerFlowClient (no mocks)."""
     return DeerFlowClient(thinking_enabled=False)
+
+
+@pytest.fixture(scope="module")
+def require_tool_calling(client):
+    """Skip tool-calling live tests when the configured provider/model lacks support."""
+
+    @tool
+    def live_probe_tool(text: str) -> str:
+        """Echo a short string."""
+
+        return text
+
+    model_name = client.list_models()["models"][0]["name"]
+    model = create_chat_model(name=model_name, thinking_enabled=False)
+
+    try:
+        response = model.bind_tools([live_probe_tool]).invoke(
+            "Use live_probe_tool with text='tool-probe'."
+        )
+    except Exception as exc:
+        pytest.skip(f"Live provider does not support tool calling: {exc}")
+
+    if not getattr(response, "tool_calls", None):
+        pytest.skip("Live provider/model did not emit tool calls for the configured model")
 
 
 @pytest.fixture
@@ -97,7 +131,7 @@ class TestLiveStreaming:
 
 
 class TestLiveToolUse:
-    def test_agent_uses_bash_tool(self, client):
+    def test_agent_uses_bash_tool(self, client, require_tool_calling):
         """Agent uses bash tool when asked to run a command."""
         events = list(client.stream("Use the bash tool to run: echo 'LIVE_TEST_OK'. Then tell me the output."))
 
@@ -119,7 +153,7 @@ class TestLiveToolUse:
         assert tc_events[0].data["tool_calls"][0]["name"] == "bash"
         assert "LIVE_TEST_OK" in tr_events[0].data["content"]
 
-    def test_agent_uses_ls_tool(self, client):
+    def test_agent_uses_ls_tool(self, client, require_tool_calling):
         """Agent uses ls tool to list a directory."""
         events = list(client.stream("Use the ls tool to list the contents of /mnt/user-data/workspace. Just report what you see."))
 
@@ -137,7 +171,7 @@ class TestLiveToolUse:
 
 
 class TestLiveMultiToolChain:
-    def test_write_then_read(self, client):
+    def test_write_then_read(self, client, require_tool_calling):
         """Agent writes a file, then reads it back."""
         events = list(client.stream("Step 1: Use write_file to write 'integration_test_content' to /mnt/user-data/outputs/live_test.txt. Step 2: Use read_file to read that file back. Step 3: Tell me the content you read."))
 
@@ -259,7 +293,7 @@ class TestLiveConfigQueries:
 
 
 class TestLiveArtifact:
-    def test_get_artifact_after_write(self, client):
+    def test_get_artifact_after_write(self, client, require_tool_calling):
         """Agent writes a file → client reads it back via get_artifact()."""
         import uuid
 
