@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from langchain_core.tools import tool
 
-from src.config.app_config import AppConfig
 from src.client import DeerFlowClient, StreamEvent
+from src.config.app_config import AppConfig
 from src.models import create_chat_model
 
 # Skip entire module in CI or when no config.yaml exists
